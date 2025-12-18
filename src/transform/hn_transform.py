@@ -1,177 +1,148 @@
-import glob
+from __future__ import annotations
+
 import json
-import os
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Tuple
 
 import pandas as pd
 
-RAW_DIR = "data/raw/hn"
-STAGING_DIR = "data/staging/hn"
-LOG_DIR = "logs"
+from src.common.files import latest_file_by_name
+from src.common.logging_utils import get_logger
+
+RAW_DIR = Path("data/raw/hn")
+STAGING_DIR = Path("data/staging/hn")
+
+logger = get_logger(__name__, "hn_transform.log")
 
 
-def log_line(message: str) -> None:
+@dataclass(frozen=True)
+class HnSchema:
+    required: tuple[str, ...] = ("id", "by", "time", "title", "type")
+
+
+def get_latest_raw_file() -> Path:
+    return latest_file_by_name(RAW_DIR, "hn_raw_*.json")
+
+
+def parse_ts_from_raw_filename(raw_file: Path) -> Tuple[str, datetime]:
     """
-    Minimal logger for Transform phase.
-    Writes to stdout and to logs/hn_transform.log
+    Example:
+      hn_raw_20251218_145959.json -> ("20251218_145959", dt_utc)
     """
-    os.makedirs(LOG_DIR, exist_ok=True)
-    line = f"{datetime.utcnow().isoformat()}Z | {message}"
-    print(line)
-    with open(os.path.join(LOG_DIR, "hn_transform.log"), "a", encoding="utf-8") as f:
-        f.write(line + "\n")
+    ts_str = raw_file.stem.replace("hn_raw_", "")
+    dt = datetime.strptime(ts_str, "%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc)
+    return ts_str, dt
 
 
-def find_latest_raw_file(raw_dir: str = RAW_DIR) -> Optional[str]:
+def transform_raw_to_df(raw_file: Path) -> pd.DataFrame:
     """
-    Find latest RAW file by filename timestamp.
-    Files look like: hn_raw_YYYYMMDD_HHMMSS.json
-    Sorting by filename works because timestamp is lexicographically sortable.
+    RAW -> typed STAGING DataFrame.
+
+    Why:
+    - stable types for downstream load (int64, timestamptz)
+    - enrichment: time_utc, kids_count, extracted_at
+    - dedup by business key (id)
     """
-    pattern = os.path.join(raw_dir, "hn_raw_*.json")
-    files = sorted(glob.glob(pattern))
-    return files[-1] if files else None
+    logger.info(f"Reading RAW: {raw_file}")
 
-
-def parse_extracted_at_from_filename(path: str) -> str:
-    """
-    Extract extracted_at from RAW filename: hn_raw_YYYYMMDD_HHMMSS.json
-    Returns ISO UTC string.
-    """
-    name = os.path.basename(path)  # hn_raw_20251217_092720.json
-    stem = name.replace(".json", "")
-    # expected: ["hn", "raw", "YYYYMMDD", "HHMMSS"]
-    parts = stem.split("_")
-    if len(parts) < 4:
-        return ""
-
-    ts_compact = parts[-2] + parts[-1]  # YYYYMMDD + HHMMSS
-    try:
-        dt = datetime.strptime(ts_compact, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
-        return dt.isoformat()
-    except Exception:
-        return ""
-
-
-def load_raw_records(path: str) -> List[Dict[str, Any]]:
-    """Load RAW JSON list from disk and filter out empty/null items."""
-    with open(path, "r", encoding="utf-8") as f:
+    with raw_file.open("r", encoding="utf-8") as f:
         data = json.load(f)
 
     if not isinstance(data, list):
-        raise ValueError(f"RAW file is not a list: {path}")
+        raise ValueError("RAW payload must be list[dict]")
 
-    return [item for item in data if item]
+    data_clean = [x for x in data if x]
+    if len(data_clean) != len(data):
+        logger.warning(f"Skipped {len(data) - len(data_clean)} null records")
 
+    df = pd.DataFrame(data_clean)
 
-def unix_to_utc_str(unix_ts: Any) -> str:
-    """Convert unix timestamp to ISO UTC string; return empty string if missing."""
-    try:
-        ts_int = int(unix_ts)
-        dt = datetime.fromtimestamp(ts_int, tz=timezone.utc)
-        return dt.isoformat()
-    except Exception:
-        return ""
+    schema = HnSchema()
+    missing = [c for c in schema.required if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing required columns: {missing}")
 
+    for col, default in [
+        ("url", None),
+        ("text", None),
+        ("kids", None),
+        ("descendants", 0),
+        ("score", 0),
+    ]:
+        if col not in df.columns:
+            df[col] = default
 
-def normalize_records(records: List[Dict[str, Any]], extracted_at: str) -> pd.DataFrame:
-    """
-    Convert list of JSON dicts to normalized staging DataFrame with fixed columns.
-    Adds derived fields: kids_count, time_utc, extracted_at.
-    """
-    df = pd.DataFrame(records)
+    df["id"] = pd.to_numeric(df["id"], errors="raise").astype("int64")
+    df["time"] = pd.to_numeric(df["time"], errors="raise").astype("int64")
+    df["score"] = pd.to_numeric(df["score"], errors="coerce").fillna(0).astype("int64")
+    df["descendants"] = (
+        pd.to_numeric(df["descendants"], errors="coerce").fillna(0).astype("int64")
+    )
 
-    # kids_count from kids list
-    if "kids" in df.columns:
-        df["kids_count"] = df["kids"].apply(lambda x: len(x) if isinstance(x, list) else 0)
-    else:
-        df["kids_count"] = 0
+    df["kids_count"] = df["kids"].apply(
+        lambda x: len(x) if isinstance(x, list) else 0
+    ).astype("int64")
 
-    # time_utc derived
-    if "time" in df.columns:
-        df["time_utc"] = df["time"].apply(unix_to_utc_str)
-    else:
-        df["time"] = pd.NA
-        df["time_utc"] = ""
+    df["time_utc"] = pd.to_datetime(df["time"], unit="s", utc=True)
 
-    # extracted_at from RAW filename
-    df["extracted_at"] = extracted_at
+    ts_str, extracted_at_dt = parse_ts_from_raw_filename(raw_file)
+    df["extracted_at"] = pd.Timestamp(extracted_at_dt)
 
-    wanted_cols = [
-        "id", "type", "by", "time", "time_utc",
-        "title", "url", "score", "descendants", "kids_count", "text",
+    out_cols = [
+        "id",
+        "type",
+        "by",
+        "time",
+        "time_utc",
+        "title",
+        "url",
+        "score",
+        "descendants",
+        "kids_count",
+        "text",
         "extracted_at",
     ]
+    df = df[out_cols].copy()
 
-    # create missing columns
-    for c in wanted_cols:
-        if c not in df.columns:
-            df[c] = pd.NA
+    before = len(df)
+    df = df.drop_duplicates(subset=["id"], keep="last").reset_index(drop=True)
+    after = len(df)
 
-    df = df[wanted_cols]
-
-    # type casting (keep simple and safe)
-    df["id"] = pd.to_numeric(df["id"], errors="coerce").astype("Int64")
-    df["time"] = pd.to_numeric(df["time"], errors="coerce").astype("Int64")
-    df["score"] = pd.to_numeric(df["score"], errors="coerce").fillna(0).astype("Int64")
-    df["descendants"] = pd.to_numeric(df["descendants"], errors="coerce").fillna(0).astype("Int64")
-    df["kids_count"] = pd.to_numeric(df["kids_count"], errors="coerce").fillna(0).astype("Int64")
+    if after == 0:
+        raise ValueError("Transform result is empty (fail-fast)")
+    if after != before:
+        logger.warning(f"Dedup: {before} -> {after}")
 
     return df
 
 
-def dq_checks(df: pd.DataFrame) -> None:
+def save_parquet(df: pd.DataFrame, ts_str: str) -> Path:
     """
-    Minimal data quality checks (fail-fast).
+    Writes STAGING artifact to Parquet.
+
+    Why Parquet:
+    - keeps types
+    - standard DE staging format
     """
-    if df.empty:
-        raise ValueError("STAGING dataframe is empty")
-
-    if df["id"].isna().all():
-        raise ValueError("All IDs are null -> RAW input likely broken")
-
-
-def save_staging_csv(df: pd.DataFrame, staging_dir: str = STAGING_DIR) -> str:
-    """Save staging dataset as timestamped CSV."""
-    os.makedirs(staging_dir, exist_ok=True)
-    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    path = os.path.join(staging_dir, f"hn_staging_{ts}.csv")
-    df.to_csv(path, index=False)
-    return path
+    STAGING_DIR.mkdir(parents=True, exist_ok=True)
+    out = STAGING_DIR / f"hn_staging_{ts_str}.parquet"
+    df.to_parquet(out, index=False, engine="pyarrow")
+    logger.info(f"Saved STAGING: {out}")
+    return out
 
 
 def run() -> None:
-    """
-    Airflow-ready entrypoint for Transform.
-    Reads latest RAW -> produces STAGING CSV.
-    """
-    log_line("HN Transform started")
+    logger.info("=== Phase 3: Transform (RAW -> STAGING Parquet) ===")
 
-    latest = find_latest_raw_file()
-    if not latest:
-        log_line("No RAW files found, nothing to transform")
-        return
+    raw_file = get_latest_raw_file()
+    ts_str, _ = parse_ts_from_raw_filename(raw_file)
 
-    extracted_at = parse_extracted_at_from_filename(latest)
-    log_line(f"Using RAW file: {latest}")
-    log_line(f"extracted_at={extracted_at}")
+    df = transform_raw_to_df(raw_file)
+    save_parquet(df, ts_str)
 
-    records = load_raw_records(latest)
-    log_line(f"Loaded RAW records: {len(records)}")
-
-    df = normalize_records(records, extracted_at=extracted_at)
-    log_line(f"Normalized rows: {len(df)}")
-
-    before = len(df)
-    df = df.drop_duplicates(subset=["id"]).reset_index(drop=True)
-    log_line(f"Deduplicated: {before} -> {len(df)} rows")
-
-    dq_checks(df)
-    log_line("DQ checks passed")
-
-    out = save_staging_csv(df)
-    log_line(f"Saved STAGING to {out}")
+    logger.info("✓ Phase 3 complete")
 
 
 if __name__ == "__main__":

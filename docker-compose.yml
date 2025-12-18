@@ -1,15 +1,4 @@
 services:
-  app:
-    build: .
-    env_file:
-      - .env
-    volumes:
-      - ./:/app
-    working_dir: /app
-    command: python src/pipeline.py
-    depends_on:
-      - postgres
-
   postgres:
     image: postgres:16
     environment:
@@ -20,6 +9,44 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U de"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Database connection
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: de
+      POSTGRES_PASSWORD: de
+      POSTGRES_DB: de
+      
+      # Fallback env
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: de
+      PGPASSWORD: de
+      PGDATABASE: de
+      
+      # Reddit
+      REDDIT_CLIENT_ID: ""
+      REDDIT_CLIENT_SECRET: ""
+      REDDIT_USER_AGENT: reddit_hn_etl/0.1
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - .:/app
+    working_dir: /app
+    command: python -m src.pipeline
 
 volumes:
   pgdata:

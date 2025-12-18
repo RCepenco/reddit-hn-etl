@@ -1,4 +1,4 @@
-requests
-pandas
-python-dotenv
-psycopg2-binary
+requests==2.31.0
+pandas==2.1.4
+psycopg2-binary==2.9.9
+pyarrow==14.0.1
