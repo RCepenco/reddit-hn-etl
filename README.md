@@ -1,113 +1,172 @@
-# Reddit & Hacker News ETL Pipeline
+# Hacker News ETL (Portfolio)
 
-Production-grade ETL pipeline for data engineering practice.  
-Extracts data from public REST APIs, processes it through staging layers, and loads it into a PostgreSQL analytical store.
+End-to-end ETL pipeline for Hacker News data following a simple and reproducible architecture:
+
+RAW (JSON) → STAGING (Parquet) → PostgreSQL (staging schema)
+
+The project is built as a data engineering portfolio and focuses on:
+- clear phase separation
+- deterministic processing
+- typed staging layer
+- idempotent data loads
 
 ---
 
-## Architecture
+## Phases
 
+### Phase 2 (Extract)
+Hacker News API → RAW JSON
+
+Output:
 ```
-API (REST) → RAW (JSON) → STAGING (normalized) → MART (PostgreSQL)
+data/raw/hn/hn_raw_YYYYMMDD_HHMMSS.json
 ```
 
-The pipeline follows **medallion architecture** principles and is designed with:
-- idempotent processing
-- clear data lineage
-- incremental extensibility
+### Phase 3 (Transform)
+RAW JSON → typed STAGING Parquet
+
+Output:
+```
+data/staging/hn/hn_staging_YYYYMMDD_HHMMSS.parquet
+```
+
+### Phase 4 (Load)
+STAGING Parquet → PostgreSQL
+
+Target table:
+```
+staging.hn_stories
+```
+
+Load is idempotent.
 
 ---
 
-## Stack
+## Why Phase 3 and Phase 4 are committed together
 
-- **Runtime**: Python 3.12
-- **Database**: PostgreSQL 16
-- **Infrastructure**: Docker, Docker Compose v2
-- **Libraries**: `requests`, `pandas`, `sqlalchemy`
+Phase 3 defines the STAGING contract (typed Parquet with fixed schema).  
+Phase 4 proves that this contract works downstream by loading it into PostgreSQL
+in an idempotent way.
+
+Together they form one end-to-end deliverable:
+a reproducible staging layer validated by a real load step.
 
 ---
 
-## Quick Start
+## Requirements
+
+- Docker
+- Docker Compose
+
+---
+
+## Run with Docker (recommended)
 
 ```bash
-# 1. Configure environment
-cp .env.example .env
+docker compose down -v
+docker compose up -d postgres
+docker compose up --build app
+```
 
-# 2. Start infrastructure
-docker compose up -d --build
-
-# 3. Verify database connectivity
-docker exec -it reddit_hn_etl-postgres-1 \
-  psql -U de -d de -c "SELECT version();"
-
-# 4. Stop services
-docker compose down
+Expected output on first run:
+```
+Phase 2: Extract ... fetched records
+Phase 3: Transform ... STAGING parquet saved
+Phase 4: Load ... Inserted > 0, Skipped = 0
+ETL pipeline finished
 ```
 
 ---
 
-## Project Structure
+## Idempotency check
+
+Re-run the pipeline:
+
+```bash
+docker compose up app
+```
+
+Expected result:
+- Inserted = 0 (or a very small number)
+- Skipped = N
+
+Idempotency is enforced by:
+- PRIMARY KEY (id)
+- ON CONFLICT DO NOTHING
+
+---
+
+## Database validation
+
+```bash
+docker compose exec postgres psql -U de -d de -c \
+  "SELECT COUNT(*) FROM staging.hn_stories;"
+```
+
+```bash
+docker compose exec postgres psql -U de -d de -c \
+  "SELECT COUNT(*) FROM (
+     SELECT id FROM staging.hn_stories
+     GROUP BY id HAVING COUNT(*) > 1
+   ) d;"
+```
+
+---
+
+## Project structure
 
 ```
+reddit_hn_etl/
+├── src/
+│   ├── common/              # Shared utilities
+│   ├── extract/             # Phase 2: API → RAW
+│   ├── transform/           # Phase 3: RAW → STAGING
+│   ├── load/                # Phase 4: STAGING → DB
+│   └── pipeline.py          # Phase orchestration
 ├── data/
-│   ├── mart/          # Analytics-ready tables
-│   ├── raw/           # Immutable source data (JSON)
-│   └── staging/       # Intermediate processed data
-├── logs/              # Execution logs
-└── src/
-    ├── extract/       # API ingestion modules
-    ├── load/          # Database write operations
-    └── transform/     # Data normalization logic
+│   ├── raw/hn/              # RAW JSON files
+│   └── staging/hn/          # STAGING Parquet files
+├── logs/                    # Structured logs
+├── docker-compose.yml
+├── Dockerfile
+├── requirements.txt
+└── README.md
 ```
 
 ---
 
-## Implementation Status
+## STAGING table
 
-**Phase 1: Infrastructure** 
-- Docker containerization
-- PostgreSQL instance
-- Volume mounts for data persistence
-- Environment variable injection
-- Isolated Docker network
+Table: staging.hn_stories
 
-**Phase 2: Extract** 
-- Hacker News API ingestion
-- Immutable RAW JSON persistence
-- Robust handling of empty / null API responses
-- Logging to logs/
-- Airflow-ready entrypoint
-
-**Phase 3: Transform** (planned) 
-**Phase 4: Load** (planned) 
-**Phase 5: Orchestration** (Airflow)
-
----
-
-## Development
-
-### Prerequisites
-- Docker Engine 20.10+
-- Docker Compose v2+
-
-### Environment Variables (`.env`)
-```
-POSTGRES_USER=de
-POSTGRES_PASSWORD=de
-POSTGRES_DB=de
-POSTGRES_PORT=5432
-```
-
-### Container Names
-- `reddit_hn_etl-app-1` — Python runtime
-- `reddit_hn_etl-postgres-1` — PostgreSQL database
+| Column       | Type        |
+|--------------|-------------|
+| id           | BIGINT (PK) |
+| type         | TEXT        |
+| by           | TEXT        |
+| time         | BIGINT      |
+| time_utc     | TIMESTAMPTZ |
+| title        | TEXT        |
+| url          | TEXT        |
+| score        | BIGINT      |
+| descendants  | BIGINT      |
+| kids_count   | BIGINT      |
+| text         | TEXT        |
+| extracted_at | TIMESTAMPTZ |
 
 ---
 
 ## Notes
 
-- All generated data and logs are excluded from version control
-- The pipeline is developed incrementally with strict separation of concerns
-- Code structure is prepared for Airflow DAG integration
-- SQL migrations and schema versioning will be introduced in the Load phase
+- STAGING uses Parquet to preserve data types
+- Files are selected deterministically by filename timestamp
+- The pipeline is safe to re-run multiple times
 
+---
+
+## Roadmap
+
+- Phase 5: Analytics MART (views)
+- Scheduling (Airflow)
+- Data quality checks
+- BI / visualization layer
