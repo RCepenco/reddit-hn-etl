@@ -126,6 +126,7 @@ reddit_hn_etl/
 ├── data/
 │   ├── raw/hn/              # RAW JSON files
 │   └── staging/hn/          # STAGING Parquet files
+├── docs/                    # Development workflow logs
 ├── logs/                    # Structured logs
 ├── docker-compose.yml
 ├── Dockerfile
@@ -161,6 +162,25 @@ Table: staging.hn_stories
 - STAGING uses Parquet to preserve data types
 - Files are selected deterministically by filename timestamp
 - The pipeline is safe to re-run multiple times
+
+---
+
+## Development Workflow
+
+**Note:** Command history tracking was implemented partway through development as a process improvement.
+
+Command history is now tracked with timestamps for reproducibility and debugging.
+
+To save today's work log:
+```bash
+save-history
+```
+
+This creates a dated log file: `docs/history_YYYY-MM-DD.txt`
+
+See [`docs/README.md`](docs/README.md) for details on the logging approach.
+
+Files are excluded from version control but can be shared for reproducibility audits.
 
 ---
 
