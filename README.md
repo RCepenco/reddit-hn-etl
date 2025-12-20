@@ -53,6 +53,22 @@ a reproducible staging layer validated by a real load step.
 
 ---
 
+## Design Decisions
+
+### Why PostgreSQL
+PostgreSQL was chosen as the primary analytical database because it is widely used in production, provides strong SQL capabilities, supports transactional guarantees, and is sufficient for small-to-medium analytical workloads. This makes the project realistic and easy to reason about without unnecessary complexity. For larger datasets, this could be replaced with Snowflake or BigQuery without changing the SQL logic.
+
+### Why full refresh MART
+The MART layer is rebuilt using a full refresh strategy based on the latest extracted batch. This ensures deterministic, idempotent results and simplifies data correctness for a portfolio project. Incremental updates were intentionally deferred as a future optimization to keep the logic transparent and easy to validate.
+
+### Why Docker Compose
+Docker Compose is used to provide a reproducible, environment-agnostic setup for PostgreSQL and the MART runner. This eliminates "works on my machine" issues and mirrors real-world deployment practices, while staying lightweight enough for local development and CI/CD.
+
+### Why separation into phases
+The pipeline is split into clear phases (Extract, Transform, Load, MART) to enforce separation of concerns. Each phase has a single responsibility, making the system easier to test, debug, and extend (e.g., replacing Python with Airflow DAGs or SQL with dbt models).
+
+---
+
 ## Requirements
 
 - Docker
