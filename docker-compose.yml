@@ -1,52 +1,39 @@
 services:
   postgres:
     image: postgres:16
+    container_name: hn_postgres
     environment:
-      POSTGRES_DB: de
-      POSTGRES_USER: de
-      POSTGRES_PASSWORD: de
+      POSTGRES_DB: hn
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U de"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hn"]
       interval: 5s
-      timeout: 5s
-      retries: 5
+      timeout: 3s
+      retries: 20
 
-  app:
+  mart:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: docker/Dockerfile.mart
+    container_name: hn_mart
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      # Database connection
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_USER: de
-      POSTGRES_PASSWORD: de
-      POSTGRES_DB: de
-      
-      # Fallback env
       PGHOST: postgres
-      PGPORT: 5432
-      PGUSER: de
-      PGPASSWORD: de
-      PGDATABASE: de
-      
-      # Reddit
-      REDDIT_CLIENT_ID: ""
-      REDDIT_CLIENT_SECRET: ""
-      REDDIT_USER_AGENT: reddit_hn_etl/0.1
+      PGPORT: "5432"
+      PGDATABASE: hn
+      PGUSER: postgres
+      PGPASSWORD: postgres
     volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
-      - .:/app
+      - ./:/app
     working_dir: /app
-    command: python -m src.pipeline
+    command: ["python", "-m", "src.mart.hn_mart"]
 
 volumes:
   pgdata:
