@@ -33,7 +33,28 @@ services:
     volumes:
       - ./:/app
     working_dir: /app
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
     command: ["python", "-m", "src.mart.hn_mart"]
+
+  load:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mart
+    container_name: hn_load
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: hn
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    volumes:
+      - ./:/app
+    working_dir: /app
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
+    command: ["python", "-m", "src.load.hn_load"]
 
 volumes:
   pgdata:
