@@ -1,20 +1,59 @@
-# Hacker News ETL (Portfolio)
+# Hacker News ETL Pipeline
 
-End-to-end ETL pipeline for Hacker News data following a simple and reproducible architecture:
+![Python](https://img.shields.io/badge/python-3.12-blue)
+![PostgreSQL](https://img.shields.io/badge/postgresql-16-blue)
+![Docker](https://img.shields.io/badge/docker--compose-v5.0-blue)
 
-RAW (JSON) → STAGING (Parquet) → PostgreSQL (staging schema)
+End-to-end ETL pipeline for Hacker News data following medallion architecture principles:
+
+**RAW (JSON) → STAGING (Parquet) → PostgreSQL → MART (Analytics)**
 
 The project is built as a data engineering portfolio and focuses on:
-- clear phase separation
-- deterministic processing
-- typed staging layer
-- idempotent data loads
+- Clear phase separation (Extract, Transform, Load, MART)
+- Deterministic processing with idempotent loads
+- Typed staging layer using Parquet
+- Production-ready PostgreSQL schema design
+- Full refresh analytics layer
 
 ---
 
-## Phases
+## Quick Start
 
-### Phase 2 (Extract)
+Run the complete pipeline:
+
+```bash
+# Clean start
+docker compose down -v
+
+# Start PostgreSQL
+docker compose up -d postgres
+
+# Run ETL (Phases 2-4: Extract → Transform → Load)
+docker compose up --build app
+
+# Build MART layer (Phase 5: Analytics)
+docker compose run --rm mart
+```
+
+Verify results:
+
+```bash
+# Check staging data
+docker compose exec postgres psql -U de -d de -c \
+  "SELECT COUNT(*) FROM staging.hn_stories;"
+
+# Check MART metrics
+docker compose exec postgres psql -U de -d de -c \
+  "SELECT metric_date, stories_count, avg_score FROM mart.daily_story_metrics ORDER BY metric_date DESC LIMIT 5;"
+```
+
+---
+
+## Architecture
+
+### ETL Phases
+
+#### Phase 2: Extract
 Hacker News API → RAW JSON
 
 Output:
@@ -22,7 +61,7 @@ Output:
 data/raw/hn/hn_raw_YYYYMMDD_HHMMSS.json
 ```
 
-### Phase 3 (Transform)
+#### Phase 3: Transform
 RAW JSON → typed STAGING Parquet
 
 Output:
@@ -30,61 +69,99 @@ Output:
 data/staging/hn/hn_staging_YYYYMMDD_HHMMSS.parquet
 ```
 
-### Phase 4 (Load)
+#### Phase 4: Load
 STAGING Parquet → PostgreSQL
 
-Target table:
-```
-staging.hn_stories
-```
+Target table: `staging.hn_stories`
 
-Load is idempotent.
+Load is idempotent using `ON CONFLICT DO NOTHING`.
 
 ---
 
-## Why Phase 3 and Phase 4 are committed together
+### Phase 5: Analytics MART
 
-Phase 3 defines the STAGING contract (typed Parquet with fixed schema).  
-Phase 4 proves that this contract works downstream by loading it into PostgreSQL
-in an idempotent way.
+**STAGING (PostgreSQL) → MART (PostgreSQL)**
 
-Together they form one end-to-end deliverable:
-a reproducible staging layer validated by a real load step.
+The MART layer provides read-optimized analytical tables for BI-style queries.
+It is rebuilt using a **full refresh strategy** and is fully idempotent.
 
----
-
-## Design Decisions
-
-### Why PostgreSQL
-PostgreSQL was chosen as the primary analytical database because it is widely used in production, provides strong SQL capabilities, supports transactional guarantees, and is sufficient for small-to-medium analytical workloads. This makes the project realistic and easy to reason about without unnecessary complexity. For larger datasets, this could be replaced with Snowflake or BigQuery without changing the SQL logic.
-
-### Why full refresh MART
-The MART layer is rebuilt using a full refresh strategy based on the latest extracted batch. This ensures deterministic, idempotent results and simplifies data correctness for a portfolio project. Incremental updates were intentionally deferred as a future optimization to keep the logic transparent and easy to validate.
-
-### Why Docker Compose
-Docker Compose is used to provide a reproducible, environment-agnostic setup for PostgreSQL and the MART runner. This eliminates "works on my machine" issues and mirrors real-world deployment practices, while staying lightweight enough for local development and CI/CD.
-
-### Why separation into phases
-The pipeline is split into clear phases (Extract, Transform, Load, MART) to enforce separation of concerns. Each phase has a single responsibility, making the system easier to test, debug, and extend (e.g., replacing Python with Airflow DAGs or SQL with dbt models).
+- Source: `staging.hn_stories`
+- Target schema: `mart`
+- Execution: SQL-only transformations
+- Orchestration: Docker Compose
 
 ---
 
-## Requirements
+## MART Tables
 
-- Docker
-- Docker Compose
+### `mart.daily_story_metrics`
+Daily aggregated metrics for Hacker News stories.
+
+| Column | Description |
+|--------|-------------|
+| `metric_date` | Story creation date (UTC) |
+| `stories_count` | Number of stories |
+| `total_score` | Sum of scores |
+| `avg_score` | Average score |
+| `total_comments` | Sum of comments |
+| `avg_comments` | Average comments |
+| `last_batch_extracted_at` | Latest batch timestamp |
+
+### `mart.top_domains_daily`
+Top domains per day.
+
+| Column | Description |
+|--------|-------------|
+| `metric_date` | Story creation date |
+| `domain` | Normalized domain |
+| `stories_count` | Stories per domain |
+| `avg_score` | Average score |
+| `last_batch_extracted_at` | Latest batch timestamp |
+
+### `mart.user_activity_daily`
+Daily user activity metrics.
+
+| Column | Description |
+|--------|-------------|
+| `metric_date` | Story creation date |
+| `author` | Story author |
+| `stories_count` | Stories posted |
+| `avg_score` | Average score |
+| `last_batch_extracted_at` | Latest batch timestamp |
 
 ---
 
-## Run with Docker (recommended)
+## STAGING Schema
+
+Table: `staging.hn_stories`
+
+| Column       | Type        | Description |
+|--------------|-------------|-------------|
+| id           | BIGINT (PK) | Story ID |
+| type         | TEXT        | Item type |
+| by           | TEXT        | Author username |
+| time         | BIGINT      | Unix timestamp |
+| time_utc     | TIMESTAMPTZ | UTC timestamp |
+| title        | TEXT        | Story title |
+| url          | TEXT        | Story URL |
+| score        | BIGINT      | Story score |
+| descendants  | BIGINT      | Comment count |
+| kids_count   | BIGINT      | Direct replies |
+| text         | TEXT        | Story text |
+| extracted_at | TIMESTAMPTZ | Extraction timestamp |
+
+---
+
+## Running the Pipeline
+
+### Full ETL (Phases 2-4)
 
 ```bash
-docker compose down -v
-docker compose up -d postgres
 docker compose up --build app
 ```
 
 Expected output on first run:
+
 ```
 Phase 2: Extract ... fetched records
 Phase 3: Transform ... STAGING parquet saved
@@ -92,9 +169,20 @@ Phase 4: Load ... Inserted > 0, Skipped = 0
 ETL pipeline finished
 ```
 
----
+### Build MART Layer (Phase 5)
 
-## Idempotency check
+```bash
+docker compose run --rm mart
+```
+
+Expected output:
+
+```
+Phase 5 starting: building MART (analytics layer) in PostgreSQL
+Phase 5 complete: MART refreshed successfully (idempotent)
+```
+
+### Idempotency Check
 
 Re-run the pipeline:
 
@@ -103,7 +191,7 @@ docker compose up app
 ```
 
 Expected result:
-- Inserted = 0 (or a very small number)
+- Inserted = 0 (or very small number)
 - Skipped = N
 
 Idempotency is enforced by:
@@ -112,12 +200,9 @@ Idempotency is enforced by:
 
 ---
 
-## Database validation
+## Validation
 
-```bash
-docker compose exec postgres psql -U de -d de -c \
-  "SELECT COUNT(*) FROM staging.hn_stories;"
-```
+### Check for duplicates in staging
 
 ```bash
 docker compose exec postgres psql -U de -d de -c \
@@ -127,21 +212,38 @@ docker compose exec postgres psql -U de -d de -c \
    ) d;"
 ```
 
+Expected: `0`
+
+### Verify MART data
+
+```bash
+docker compose exec postgres psql -U de -d de -c \
+  "SELECT * FROM mart.daily_story_metrics ORDER BY metric_date DESC LIMIT 3;"
+```
+
 ---
 
-## Project structure
+
+## Project Structure
 
 ```
-reddit_hn_etl/
+hn_etl/
 ├── src/
 │   ├── common/              # Shared utilities
 │   ├── extract/             # Phase 2: API → RAW
 │   ├── transform/           # Phase 3: RAW → STAGING
 │   ├── load/                # Phase 4: STAGING → DB
+│   ├── mart/                # Phase 5: Analytics MART
 │   └── pipeline.py          # Phase orchestration
 ├── data/
 │   ├── raw/hn/              # RAW JSON files
-│   └── staging/hn/          # STAGING Parquet files
+│   ├── staging/hn/          # STAGING Parquet files
+│   └── mart/                # MART intermediate files
+├── sql/
+│   ├── load/                # SQL scripts for Phase 4
+│   └── mart/                # SQL scripts for Phase 5
+├── docker/
+│   └── Dockerfile.mart      # Dockerfile for MART runner
 ├── docs/                    # Development workflow logs
 ├── logs/                    # Structured logs
 ├── docker-compose.yml
@@ -152,32 +254,29 @@ reddit_hn_etl/
 
 ---
 
-## STAGING table
+## Design Decisions
 
-Table: staging.hn_stories
+### Why PostgreSQL
+PostgreSQL was chosen as the primary analytical database because it is widely used in production, provides strong SQL capabilities, supports transactional guarantees, and is sufficient for small-to-medium analytical workloads. This makes the project realistic and easy to reason about without unnecessary complexity. For larger datasets, this could be replaced with Snowflake or BigQuery without changing the SQL logic.
 
-| Column       | Type        |
-|--------------|-------------|
-| id           | BIGINT (PK) |
-| type         | TEXT        |
-| by           | TEXT        |
-| time         | BIGINT      |
-| time_utc     | TIMESTAMPTZ |
-| title        | TEXT        |
-| url          | TEXT        |
-| score        | BIGINT      |
-| descendants  | BIGINT      |
-| kids_count   | BIGINT      |
-| text         | TEXT        |
-| extracted_at | TIMESTAMPTZ |
+### Why Full Refresh MART
+The MART layer is rebuilt using a full refresh strategy based on the complete STAGING history. This ensures deterministic, idempotent results and simplifies data correctness for a portfolio project. Incremental updates were intentionally deferred as a future optimization to keep the logic transparent and easy to validate.
+
+### Why Docker Compose
+Docker Compose is used to provide a reproducible, environment-agnostic setup for PostgreSQL and the MART runner. This eliminates "works on my machine" issues and mirrors real-world deployment practices, while staying lightweight enough for local development and CI/CD.
+
+### Why Separation into Phases
+The pipeline is split into clear phases (Extract, Transform, Load, MART) to enforce separation of concerns. Each phase has a single responsibility, making the system easier to test, debug, and extend (e.g., replacing Python with Airflow DAGs or SQL with dbt models).
+
+### Why Parquet for STAGING
+STAGING uses Parquet to preserve data types and provide a typed contract between Extract and Load phases. This ensures schema consistency and makes the pipeline more robust to API changes.
 
 ---
 
-## Notes
+## Requirements
 
-- STAGING uses Parquet to preserve data types
-- Files are selected deterministically by filename timestamp
-- The pipeline is safe to re-run multiple times
+- Docker
+- Docker Compose
 
 ---
 
@@ -188,6 +287,7 @@ Table: staging.hn_stories
 Command history is now tracked with timestamps for reproducibility and debugging.
 
 To save today's work log:
+
 ```bash
 save-history
 ```
@@ -200,9 +300,23 @@ Files are excluded from version control but can be shared for reproducibility au
 
 ---
 
+## Notes
+
+- Files are selected deterministically by filename timestamp
+- The pipeline is safe to re-run multiple times
+- All transformations are deterministic and reproducible
+- MART tables include analytical indexes for time-series queries
+
+---
+
 ## Roadmap
 
-- Phase 5: Analytics MART (views)
-- Scheduling (Airflow)
-- Data quality checks
-- BI / visualization layer
+- [ ] Orchestration with Airflow
+- [ ] Data quality checks (Great Expectations)
+- [ ] Incremental MART updates
+- [ ] BI visualization layer (Metabase / Superset)
+- [ ] CI/CD pipeline
+
+
+
+
