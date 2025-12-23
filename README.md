@@ -71,11 +71,11 @@ docker compose run --rm mart
 
 ```bash
 # Check staging data
-docker compose exec postgres psql -U de -d de -c \
+docker exec -it hn_postgres psql -U postgres -d hn -c \
   "SELECT COUNT(*) FROM staging.hn_stories;"
 
 # Check MART metrics
-docker compose exec postgres psql -U de -d de -c \
+docker exec -it hn_postgres psql -U postgres -d hn -c \
   "SELECT metric_date, stories_count, avg_score FROM mart.daily_story_metrics ORDER BY metric_date DESC LIMIT 5;"
 ```
 
@@ -230,7 +230,7 @@ Idempotency is enforced by:
 ### Check for duplicates in staging
 
 ```bash
-docker compose exec postgres psql -U de -d de -c \
+docker exec -it hn_postgres psql -U postgres -d hn -c \
   "SELECT COUNT(*) FROM (
      SELECT id FROM staging.hn_stories
      GROUP BY id HAVING COUNT(*) > 1
@@ -242,7 +242,7 @@ Expected: `0`
 ### Verify MART data
 
 ```bash
-docker compose exec postgres psql -U de -d de -c \
+docker exec -it hn_postgres psql -U postgres -d hn -c \
   "SELECT * FROM mart.daily_story_metrics ORDER BY metric_date DESC LIMIT 3;"
 ```
 
