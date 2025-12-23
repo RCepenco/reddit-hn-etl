@@ -23,3 +23,6 @@ docs/history_*.txt
 
 MASTER.md
 *.zip
+
+# Local BI runtime data
+metabase-data/
