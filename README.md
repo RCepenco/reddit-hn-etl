@@ -1,8 +1,36 @@
 # Hacker News ETL Pipeline
 
+Production-style ETL pipeline built as a Data Engineering portfolio project.
+
+This project demonstrates how to design, implement, and reason about a real-world
+data pipeline with a strong focus on correctness, reproducibility, and explainable architecture.
+
+**Core stack:** Python · SQL · PostgreSQL · Docker
+**Architecture:** RAW → STAGING → PostgreSQL → MART
+
+---
+
+## What this project demonstrates
+
+- End-to-end ETL / ELT pipeline design
+- Deterministic and idempotent data processing
+- Typed STAGING layer using Parquet
+- SQL-first analytics MART layer
+- Conscious architectural trade-offs (portfolio vs production)
+- Ability to clearly explain design during interviews
+
+> A compact, reproducible data pipeline showcasing end-to-end ETL design,
+> idempotent data processing, and SQL-based analytical modeling.
+
+---
+
 ![Python](https://img.shields.io/badge/python-3.12-blue)
 ![PostgreSQL](https://img.shields.io/badge/postgresql-16-blue)
 ![Docker](https://img.shields.io/badge/docker--compose-v5.0-blue)
+
+---
+
+## Detailed Architecture & Implementation
 
 End-to-end ETL pipeline for Hacker News data following medallion architecture principles:
 
@@ -19,23 +47,27 @@ The project is built as a data engineering portfolio and focuses on:
 
 ## Quick Start
 
-Run the complete pipeline:
+### Cold start (first run)
+
+> Note: Extract and Transform (Phases 2–3) are executed locally for transparency and fast iteration.
+> Docker is used for Load and MART phases only to ensure reproducible database environments.
 
 ```bash
-# Clean start
-docker compose down -v
+# 1. Generate staging data (local execution)
+python src/extract/hn_extract.py
+python src/transform/hn_transform.py
 
-# Start PostgreSQL
+# 2. Start PostgreSQL
 docker compose up -d postgres
 
-# Run ETL (Phases 2-4: Extract → Transform → Load)
-docker compose up --build app
+# 3. Load data into PostgreSQL (Phase 4)
+docker compose run --rm load
 
-# Build MART layer (Phase 5: Analytics)
+# 4. Build analytics MART (Phase 5)
 docker compose run --rm mart
 ```
 
-Verify results:
+### Verify results:
 
 ```bash
 # Check staging data
@@ -46,6 +78,28 @@ docker compose exec postgres psql -U de -d de -c \
 docker compose exec postgres psql -U de -d de -c \
   "SELECT metric_date, stories_count, avg_score FROM mart.daily_story_metrics ORDER BY metric_date DESC LIMIT 5;"
 ```
+
+---
+
+## Pipeline Execution Model
+
+This project uses a hybrid execution model:
+
+- Extract and Transform (Phases 2–3) run as local Python scripts for transparency and fast iteration
+- Load and MART (Phases 4–5) run in Docker containers to ensure reproducible database environments
+- This design is intentional for a portfolio project and avoids over-engineering without a workflow orchestrator
+- In production, the pipeline would be orchestrated using Airflow with full containerization
+
+### Cold Start Order
+
+High-level execution sequence:
+
+1. Generate STAGING data (Extract & Transform)
+2. Start PostgreSQL
+3. Load data into PostgreSQL (Phase 4)
+4. Build analytics MART (Phase 5)
+
+See Quick Start → Cold start (first run) for executable commands.
 
 ---
 
@@ -152,42 +206,13 @@ Table: `staging.hn_stories`
 
 ---
 
-## Running the Pipeline
-
-### Full ETL (Phases 2-4)
-
-```bash
-docker compose up --build app
-```
-
-Expected output on first run:
-
-```
-Phase 2: Extract ... fetched records
-Phase 3: Transform ... STAGING parquet saved
-Phase 4: Load ... Inserted > 0, Skipped = 0
-ETL pipeline finished
-```
-
-### Build MART Layer (Phase 5)
-
-```bash
-docker compose run --rm mart
-```
-
-Expected output:
-
-```
-Phase 5 starting: building MART (analytics layer) in PostgreSQL
-Phase 5 complete: MART refreshed successfully (idempotent)
-```
 
 ### Idempotency Check
 
 Re-run the pipeline:
 
 ```bash
-docker compose up app
+docker compose run --rm load
 ```
 
 Expected result:
@@ -282,9 +307,8 @@ STAGING uses Parquet to preserve data types and provide a typed contract between
 
 ## Development Workflow
 
-**Note:** Command history tracking was implemented partway through development as a process improvement.
-
-Command history is now tracked with timestamps for reproducibility and debugging.
+> Note: Command history tracking was introduced partway through development as a deliberate process improvement.
+> Command history is now tracked with timestamps for reproducibility and debugging.
 
 To save today's work log:
 
@@ -305,12 +329,14 @@ Files are excluded from version control but can be shared for reproducibility au
 - Files are selected deterministically by filename timestamp
 - The pipeline is safe to re-run multiple times
 - All transformations are deterministic and reproducible
-- MART tables include analytical indexes for time-series queries
+- MART tables include analytical indexes optimized for time-series queries
+
 
 ---
 
 ## Roadmap
 
+- [x] Hybrid execution model documented
 - [ ] Orchestration with Airflow
 - [ ] Data quality checks (Great Expectations)
 - [ ] Incremental MART updates
