@@ -20,3 +20,6 @@ logs/
 # Env
 .env
 docs/history_*.txt
+
+MASTER.md
+*.zip

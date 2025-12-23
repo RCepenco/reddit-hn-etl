@@ -38,10 +38,12 @@ def main() -> int:
     db_name = os.getenv("PGDATABASE", "postgres")
     db_user = os.getenv("PGUSER", "postgres")
     db_pass = os.getenv("PGPASSWORD", "postgres")
-
+   
     scripts = [
-        Path("sql/mart/01_schema.sql"),
-        Path("sql/mart/02_marts.sql"),
+    Path("sql/mart/01_schema.sql"),
+    Path("sql/mart/02_marts.sql"),
+    Path("sql/mart/04_indexes.sql"),
+    Path("sql/mart/03_checks.sql"),
     ]
 
     logger.info("Phase 5 starting: building MART (analytics layer) in PostgreSQL")
